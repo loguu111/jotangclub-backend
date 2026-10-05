@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.jotang.jotangnote.mapper.NoteMapper">
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO notes (title, content)
+        VALUES (#{title}, #{content})
+    </insert>
+
+    <select id="findById" resultType="Note">
+        SELECT id, title, content, created_at, updated_at
+        FROM notes
+        WHERE id = #{id}
+    </select>
+
+    <update id="update">
+        UPDATE notes
+        SET title = #{title}, content = #{content}
+        WHERE id = #{id}
+    </update>
+
+    <delete id="deleteById">
+        DELETE FROM notes WHERE id = #{id}
+    </delete>
+
+</mapper>
