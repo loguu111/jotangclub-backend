@@ -52,6 +52,19 @@
 			<artifactId>mybatis-spring-boot-starter</artifactId>
 			<version>4.1.0</version> 
 		</dependency>
+
+		<!-- Redis：用来存放登录 token（Part 2 的查询缓存也会用到它） -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-data-redis</artifactId>
+		</dependency>
+
+		<!-- 只要 BCrypt 这个密码加密工具，不引整个 Spring Security -->
+		<!-- 注意：若引 spring-boot-starter-security，所有接口会默认被登录拦截 -->
+		<dependency>
+			<groupId>org.springframework.security</groupId>
+			<artifactId>spring-security-crypto</artifactId>
+		</dependency>
 	</dependencies>
 	<!--此处依赖添加为 AI 代写-->
 	<build>

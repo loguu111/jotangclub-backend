@@ -7,6 +7,8 @@ public class Note
     private Long id;
     private String title;
     private String content;
+    /** 发布者 ID，对应 users.id（P1-02 新增） */
+    private Long userId;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 
@@ -18,6 +20,9 @@ public class Note
 
     public String getContent() { return content; }
     public void setContent(String content) { this.content = content; }
+
+    public Long getUserId() { return userId; }
+    public void setUserId(Long userId) { this.userId = userId; }
 
     public LocalDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }

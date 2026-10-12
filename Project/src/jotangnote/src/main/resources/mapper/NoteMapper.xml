@@ -4,12 +4,12 @@
 <mapper namespace="com.jotang.jotangnote.mapper.NoteMapper">
 
     <insert id="insert" useGeneratedKeys="true" keyProperty="id">
-        INSERT INTO notes (title, content)
-        VALUES (#{title}, #{content})
+        INSERT INTO notes (title, content, user_id)
+        VALUES (#{title}, #{content}, #{userId})
     </insert>
 
     <select id="findById" resultType="Note">
-        SELECT id, title, content, created_at, updated_at
+        SELECT id, title, content, user_id, created_at, updated_at
         FROM notes
         WHERE id = #{id}
     </select>
