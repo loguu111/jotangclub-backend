@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- namespace 必须等于 UserMapper 接口的全限定名，id 必须等于方法名 -->
+<mapper namespace="com.jotang.jotangnote.mapper.UserMapper">
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO users (username, password)
+        VALUES (#{username}, #{password})
+    </insert>
+
+    <select id="findByUsername" resultType="User">
+        SELECT id, username, password, created_at
+        FROM users
+        WHERE username = #{username}
+    </select>
+
+</mapper>
