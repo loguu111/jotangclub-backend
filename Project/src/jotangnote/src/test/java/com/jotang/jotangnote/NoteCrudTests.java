@@ -3,6 +3,7 @@ package com.jotang.jotangnote;
 import com.jotang.jotangnote.entity.Note;
 import com.jotang.jotangnote.entity.User;
 import com.jotang.jotangnote.mapper.NoteMapper;
+import com.jotang.jotangnote.service.NoteCacheService;
 import com.jotang.jotangnote.service.TokenService;
 import com.jotang.jotangnote.service.UserService;
 import org.junit.jupiter.api.AfterEach;
@@ -16,6 +17,8 @@ import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -36,6 +39,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * @Transactional         每个测试方法结束时自动回滚，测试数据不会留在数据库里
  *
  * P1-02 之后新增/修改/删除都需要登录，所以每个用例开始前先注册一个用户并拿到 token。
+ * P2-01 之后查询会写 Redis 缓存，而 Redis 不受事务回滚管辖，用过的笔记 id 要手动清理。
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -56,6 +60,11 @@ class NoteCrudTests
     @Autowired
     private TokenService tokenService;
 
+    @Autowired
+    private NoteCacheService noteCache;
+
+    private final List<Long> noteIdsToClean = new ArrayList<>();
+
     private Long userId;
     private String token;
 
@@ -70,8 +79,10 @@ class NoteCrudTests
     @AfterEach
     void tearDown()
     {
-        // token 存在 Redis 里，不受 @Transactional 回滚影响，必须手动清理
+        // token 和缓存都存在 Redis 里，不受 @Transactional 回滚影响，必须手动清理
         tokenService.removeToken(token);
+        noteIdsToClean.forEach(noteCache::evict);
+        noteIdsToClean.clear();
     }
 
     /** 请求头里的登录凭证 */
@@ -87,6 +98,7 @@ class NoteCrudTests
         note.setContent(content);
         note.setUserId(userId);          // 必须指定发布者，notes.user_id 有外键约束
         noteMapper.insert(note);
+        noteIdsToClean.add(note.getId());
         return note;
     }
 

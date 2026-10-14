@@ -19,10 +19,12 @@ public class NoteService
 {
 
     private final NoteMapper noteMapper;
+    private final NoteCacheService noteCache;
 
-    public NoteService(NoteMapper noteMapper)
+    public NoteService(NoteMapper noteMapper, NoteCacheService noteCache)
     {
         this.noteMapper = noteMapper;
+        this.noteCache = noteCache;
     }
 
     /**
@@ -37,10 +39,33 @@ public class NoteService
         return noteMapper.findById(note.getId());
     }
 
-    /** 根据 ID 查询笔记，查不到返回 null */
+    /**
+     * 根据 ID 查询笔记，查不到返回 null。
+     *
+     * P2-01：这里改成 Cache-Aside（旁路缓存）三步走：
+     *   1. 先查 Redis，命中就直接返回，完全不碰 MySQL
+     *   2. 没命中再去查 MySQL
+     *   3. 从 MySQL 查到了，顺手写进 Redis，下次就不用查库了
+     */
     public Note findById(Long id)
     {
-        return noteMapper.findById(id);
+        // 1. 先看缓存
+        Note cached = noteCache.get(id);
+        if (cached != null)
+        {
+            return cached;
+        }
+
+        // 2. 缓存没有，查数据库
+        Note note = noteMapper.findById(id);
+        if (note == null)
+        {
+            return null;      // 数据库也没有，就是真的不存在
+        }
+
+        // 3. 回写缓存，下次同样的查询就不用再查库了
+        noteCache.put(note);
+        return note;
     }
 
     /** 修改笔记：只能改自己的 */
@@ -51,6 +76,8 @@ public class NoteService
 
         note.setId(id);
         noteMapper.update(note);
+        // 数据变了，缓存里的旧内容必须删掉，否则下次查询会读到过期数据（缓存一致性）
+        noteCache.evict(id);
         return noteMapper.findById(id);
     }
 
@@ -60,6 +87,8 @@ public class NoteService
     {
         checkOwner(id, userId, "删除");
         noteMapper.deleteById(id);
+        // 笔记都没了，缓存也不能留着
+        noteCache.evict(id);
     }
 
     /**

@@ -3,6 +3,7 @@ package com.jotang.jotangnote;
 import com.jotang.jotangnote.entity.Note;
 import com.jotang.jotangnote.entity.User;
 import com.jotang.jotangnote.mapper.NoteMapper;
+import com.jotang.jotangnote.service.NoteCacheService;
 import com.jotang.jotangnote.service.TokenService;
 import com.jotang.jotangnote.service.UserService;
 import org.junit.jupiter.api.AfterEach;
@@ -57,13 +58,20 @@ class AuthTests
     @Autowired
     private NoteMapper noteMapper;
 
+    /** 查询接口会写 Redis 缓存，缓存不受事务回滚影响，用过的笔记 id 要手动清 */
+    @Autowired
+    private NoteCacheService noteCache;
+
     private final List<String> tokensToClean = new ArrayList<>();
+    private final List<Long> noteIdsToClean = new ArrayList<>();
 
     @AfterEach
     void tearDown()
     {
         tokensToClean.forEach(tokenService::removeToken);
         tokensToClean.clear();
+        noteIdsToClean.forEach(noteCache::evict);
+        noteIdsToClean.clear();
     }
 
     private String newUsername()
@@ -190,6 +198,7 @@ class AuthTests
         note.setContent("别人的正文");
         note.setUserId(ownerId);
         noteMapper.insert(note);
+        noteIdsToClean.add(note.getId());
 
         // 查询是公开的，谁都能看
         mockMvc.perform(get("/notes/{id}", note.getId()))
