@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>JotangNote</title>
+    <style>
+        * { box-sizing: border-box; }
+        body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+               background: #f6f7fb; color: #222; }
+        header { background: #7c3aed; color: #fff; padding: 14px 20px; font-weight: 600; }
+        main { display: grid; grid-template-columns: 1fr 1fr; gap: 16px;
+               padding: 16px; max-width: 1200px; margin: 0 auto; }
+        @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+        section { background: #fff; border-radius: 10px; padding: 16px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+        h2 { margin: 0 0 12px; font-size: 16px; }
+        input, textarea { width: 100%; padding: 8px; border: 1px solid #d5d7e0;
+                          border-radius: 6px; margin-bottom: 8px; font: inherit; }
+        textarea { min-height: 70px; resize: vertical; }
+        button { padding: 8px 14px; border: 0; border-radius: 6px; background: #7c3aed;
+                 color: #fff; cursor: pointer; font: inherit; }
+        button.ghost { background: #eceef5; color: #333; }
+        .row { display: flex; gap: 8px; }
+        .muted { color: #777; font-size: 13px; }
+        ul#note-list { list-style: none; padding: 0; margin: 0; max-height: 300px; overflow: auto; }
+        ul#note-list li { padding: 8px; border-bottom: 1px solid #eee; cursor: pointer; }
+        ul#note-list li:hover { background: #f4f2ff; }
+        #note-detail { white-space: pre-wrap; background: #faf9ff; border: 1px solid #eee;
+                       border-radius: 6px; padding: 10px; margin-top: 10px; min-height: 60px; }
+        #chat-log { height: 300px; overflow: auto; background: #faf9ff; border: 1px solid #eee;
+                    border-radius: 6px; padding: 10px; margin-bottom: 8px; }
+        .msg { margin-bottom: 8px; }
+        .msg.user { text-align: right; }
+        .msg .bubble { display: inline-block; padding: 6px 10px; border-radius: 10px;
+                       max-width: 80%; text-align: left; white-space: pre-wrap; }
+        .msg.user .bubble { background: #7c3aed; color: #fff; }
+        .msg.ai .bubble { background: #eceef5; }
+        .msg.tip { text-align: center; color: #999; font-size: 13px; }
+        #toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+                 background: #222; color: #fff; padding: 8px 16px; border-radius: 20px;
+                 opacity: 0; transition: opacity .3s; pointer-events: none; }
+        #toast.show { opacity: .92; }
+    </style>
+</head>
+<body>
+<header>🍭 JotangNote · 焦糖工作室 2026 后端招新项目</header>
+
+<main>
+    <section>
+        <h2>👤 账号</h2>
+        <input id="username" placeholder="用户名">
+        <input id="password" type="password" placeholder="密码（至少 6 位）">
+        <div class="row">
+            <button onclick="register()">注册</button>
+            <button class="ghost" onclick="login()">登录</button>
+            <button class="ghost" onclick="logout()">退出</button>
+        </div>
+        <p class="muted" id="who">未登录</p>
+    </section>
+
+    <section>
+        <h2>📚 笔记</h2>
+        <input id="note-title" placeholder="标题">
+        <textarea id="note-content" placeholder="正文"></textarea>
+        <div class="row">
+            <button onclick="createNote()">发布</button>
+            <button class="ghost" onclick="loadNotes()">刷新列表</button>
+        </div>
+        <p class="muted">写操作是异步的（接口立刻返回 202），所以发布后会自动刷新列表。点下面任意一条看全文。</p>
+        <ul id="note-list"></ul>
+        <div id="note-detail">（未选择笔记）</div>
+    </section>
+
+    <section style="grid-column: 1 / -1;">
+        <h2>🤖 AI 助手</h2>
+        <div id="chat-log"></div>
+        <div class="row">
+            <input id="chat-input" placeholder="例如：帮我把笔记 17 总结成三句话"
+                   onkeydown="if (event.key === 'Enter') sendChat()">
+            <button onclick="sendChat()">发送</button>
+            <button class="ghost" onclick="newConversation()">新会话</button>
+        </div>
+        <p class="muted">会话号：<span id="cid">（还没有，发送第一条消息时自动创建）</span></p>
+    </section>
+</main>
+
+<div id="toast"></div>
+
+<script>
+    // 登录凭证和当前会话都存在浏览器本地
+    const state = {
+        token: localStorage.getItem('token'),
+        username: localStorage.getItem('username'),
+        conversationId: null
+    };
+
+    function toast(text) {
+        const el = document.getElementById('toast');
+        el.textContent = text;
+        el.classList.add('show');
+        setTimeout(() => el.classList.remove('show'), 2200);
+    }
+
+    /** 统一的请求方法：自动带上登录凭证、自动解析 JSON、自动抛错 */
+    async function api(path, options = {}) {
+        const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
+        if (state.token) headers['Authorization'] = 'Bearer ' + state.token;
+        const resp = await fetch(path, { ...options, headers });
+        const text = await resp.text();
+        const data = text ? JSON.parse(text) : null;
+        if (!resp.ok) {
+            throw new Error((data && (data.message || data.error)) || ('HTTP ' + resp.status));
+        }
+        return { status: resp.status, data };
+    }
+
+    function renderWho() {
+        document.getElementById('who').textContent =
+            state.token ? ('已登录：' + (state.username || '?')) : '未登录';
+    }
+
+    // ---------- 账号 ----------
+
+    async function register() {
+        const username = document.getElementById('username').value.trim();
+        const password = document.getElementById('password').value;
+        try {
+            await api('/auth/register', { method: 'POST', body: JSON.stringify({ username, password }) });
+            toast('注册成功，正在自动登录…');
+            await login();
+        } catch (e) { toast('注册失败：' + e.message); }
+    }
+
+    async function login() {
+        const username = document.getElementById('username').value.trim();
+        const password = document.getElementById('password').value;
+        try {
+            const { data } = await api('/auth/login', { method: 'POST', body: JSON.stringify({ username, password }) });
+            state.token = data.token;
+            state.username = data.username;
+            localStorage.setItem('token', data.token);
+            localStorage.setItem('username', data.username);
+            renderWho();
+            toast('登录成功');
+            loadNotes();
+        } catch (e) { toast('登录失败：' + e.message); }
+    }
+
+    async function logout() {
+        try { await api('/auth/logout', { method: 'POST' }); } catch (e) { /* 忽略 */ }
+        state.token = null; state.username = null;
+        localStorage.removeItem('token');
+        localStorage.removeItem('username');
+        renderWho();
+        toast('已退出登录');
+    }
+
+    // ---------- 笔记 ----------
+
+    async function loadNotes() {
+        try {
+            const { data } = await api('/notes');
+            const list = document.getElementById('note-list');
+            list.innerHTML = '';
+            if (!data || data.length === 0) {
+                list.innerHTML = '<li class="muted">还没有笔记</li>';
+                return;
+            }
+            data.forEach(note => {
+                const li = document.createElement('li');
+                li.textContent = '#' + note.id + '　' + note.title;
+                li.onclick = () => showNote(note.id);
+                list.appendChild(li);
+            });
+        } catch (e) { toast('加载列表失败：' + e.message); }
+    }
+
+    async function createNote() {
+        const title = document.getElementById('note-title').value.trim();
+        const content = document.getElementById('note-content').value.trim();
+        if (!state.token) { toast('请先登录'); return; }
+        try {
+            const { status, data } = await api('/notes', {
+                method: 'POST', body: JSON.stringify({ title, content })
+            });
+            // 202 = 已受理，真正的写库由 RabbitMQ 消费者在后台完成
+            toast('已受理（HTTP ' + status + '），消息号 ' + data.messageId.slice(0, 8) + '…，1 秒后刷新');
+            document.getElementById('note-title').value = '';
+            document.getElementById('note-content').value = '';
+            setTimeout(loadNotes, 1000);
+        } catch (e) { toast('发布失败：' + e.message); }
+    }
+
+    async function showNote(id) {
+        try {
+            const { data } = await api('/notes/' + id);
+            document.getElementById('note-detail').textContent =
+                '#' + data.id + '　' + data.title + '\n\n' + data.content +
+                '\n\n（作者 ID：' + data.userId + '　创建于 ' + data.createdAt + '）';
+        } catch (e) { toast('查询失败：' + e.message); }
+    }
+
+    // ---------- AI 对话 ----------
+
+    function appendMessage(role, text) {
+        const log = document.getElementById('chat-log');
+        const div = document.createElement('div');
+        div.className = 'msg ' + role;
+        const bubble = document.createElement('div');
+        bubble.className = 'bubble';
+        bubble.textContent = text;
+        div.appendChild(bubble);
+        log.appendChild(div);
+        log.scrollTop = log.scrollHeight;
+    }
+
+    async function sendChat() {
+        const input = document.getElementById('chat-input');
+        const message = input.value.trim();
+        if (!message) return;
+
+        appendMessage('user', message);
+        input.value = '';
+        appendMessage('tip', 'AI 思考中…（它可能会先去查笔记）');
+
+        try {
+            const payload = { message };
+            if (state.conversationId) payload.conversationId = state.conversationId;
+            const { data } = await api('/chat', { method: 'POST', body: JSON.stringify(payload) });
+
+            state.conversationId = data.conversationId;
+            document.getElementById('cid').textContent = data.conversationId;
+
+            const log = document.getElementById('chat-log');
+            log.removeChild(log.lastChild);          // 去掉"思考中…"
+            appendMessage('ai', data.reply);
+        } catch (e) {
+            const log = document.getElementById('chat-log');
+            log.removeChild(log.lastChild);
+            appendMessage('ai', '出错了：' + e.message + '（检查一下 API Key 配了没）');
+        }
+    }
+
+    function newConversation() {
+        state.conversationId = null;
+        document.getElementById('chat-log').innerHTML = '';
+        document.getElementById('cid').textContent = '（还没有，发送第一条消息时自动创建）';
+        toast('已开启新会话');
+    }
+
+    // ---------- 打开页面时 ----------
+    renderWho();
+    loadNotes();
+</script>
+</body>
+</html>
