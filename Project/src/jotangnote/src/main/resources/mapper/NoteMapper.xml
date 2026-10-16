@@ -14,6 +14,12 @@
         WHERE id = #{id}
     </select>
 
+    <select id="findAll" resultType="Note">
+        SELECT id, title, content, user_id, created_at, updated_at
+        FROM notes
+        ORDER BY id DESC
+    </select>
+
     <update id="update">
         UPDATE notes
         SET title = #{title}, content = #{content}

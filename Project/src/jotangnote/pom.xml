@@ -65,6 +65,12 @@
 			<groupId>org.springframework.security</groupId>
 			<artifactId>spring-security-crypto</artifactId>
 		</dependency>
+
+		<!-- RabbitMQ：P3 起使用，把笔记的增删改变成"投递消息 + 后台消费" -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-amqp</artifactId>
+		</dependency>
 	</dependencies>
 	<!--此处依赖添加为 AI 代写-->
 	<build>

@@ -1,25 +1,9 @@
 package com.jotang.jotangnote;
 
 import com.jotang.jotangnote.entity.Note;
-import com.jotang.jotangnote.entity.User;
-import com.jotang.jotangnote.mapper.NoteMapper;
-import com.jotang.jotangnote.service.NoteCacheService;
-import com.jotang.jotangnote.service.TokenService;
-import com.jotang.jotangnote.service.UserService;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
-import org.springframework.test.web.servlet.MockMvc;
-import org.springframework.transaction.annotation.Transactional;
-
-import java.util.ArrayList;
-import java.util.List;
-import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -34,88 +18,34 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 /**
  * P1-01 笔记增删改查 接口测试。
  *
- * @SpringBootTest        启动完整的 Spring 容器（真实连接 MySQL，不是假数据）
- * @AutoConfigureMockMvc  装配 MockMvc：不用启动 Tomcat 就能模拟发 HTTP 请求
- * @Transactional         每个测试方法结束时自动回滚，测试数据不会留在数据库里
- *
- * P1-02 之后新增/修改/删除都需要登录，所以每个用例开始前先注册一个用户并拿到 token。
- * P2-01 之后查询会写 Redis 缓存，而 Redis 不受事务回滚管辖，用过的笔记 id 要手动清理。
+ * P3-01 之后三个写接口都变成异步了：
+ *   接口只负责"投递消息"并返回 202，真正的写库由消费者在后台完成。
+ *   所以测试的断言也变了 —— 先断言 202，再【轮询等待】数据库里的变化。
  */
-@SpringBootTest
-@AutoConfigureMockMvc
-@Transactional
-class NoteCrudTests
+class NoteCrudTests extends ApiTestBase
 {
 
-    @Autowired
-    private MockMvc mockMvc;
-
-    /** 直接调用 Mapper 造测试数据，省得每次测试都依赖上一个接口的返回值 */
-    @Autowired
-    private NoteMapper noteMapper;
-
-    @Autowired
-    private UserService userService;
-
-    @Autowired
-    private TokenService tokenService;
-
-    @Autowired
-    private NoteCacheService noteCache;
-
-    private final List<Long> noteIdsToClean = new ArrayList<>();
-
-    private Long userId;
-    private String token;
-
-    @BeforeEach
-    void setUp()
-    {
-        User user = userService.register("crud" + UUID.randomUUID().toString().substring(0, 8), "123456");
-        userId = user.getId();
-        token = tokenService.createToken(userId);
-    }
-
-    @AfterEach
-    void tearDown()
-    {
-        // token 和缓存都存在 Redis 里，不受 @Transactional 回滚影响，必须手动清理
-        tokenService.removeToken(token);
-        noteIdsToClean.forEach(noteCache::evict);
-        noteIdsToClean.clear();
-    }
-
-    /** 请求头里的登录凭证 */
-    private String bearer()
-    {
-        return "Bearer " + token;
-    }
-
-    private Note insertNote(String title, String content)
-    {
-        Note note = new Note();
-        note.setTitle(title);
-        note.setContent(content);
-        note.setUserId(userId);          // 必须指定发布者，notes.user_id 有外键约束
-        noteMapper.insert(note);
-        noteIdsToClean.add(note.getId());
-        return note;
-    }
-
     @Test
-    @DisplayName("新增笔记：返回自增 id，且数据库生成的创建/更新时间被回填")
+    @DisplayName("新增笔记：接口返回 202 已受理，消费者随后真的写进数据库")
     void createNote() throws Exception
     {
         mockMvc.perform(post("/notes")
                         .header("Authorization", bearer())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"title\":\"新增测试\",\"content\":\"新增正文\"}"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.id").isNumber())
-                .andExpect(jsonPath("$.title").value("新增测试"))
-                .andExpect(jsonPath("$.content").value("新增正文"))
-                .andExpect(jsonPath("$.createdAt").isNotEmpty())
-                .andExpect(jsonPath("$.updatedAt").isNotEmpty());
+                .andExpect(status().isAccepted())                  // 202，不是 200
+                .andExpect(jsonPath("$.messageId").isNotEmpty());  // 返回的是消息 id，不是笔记
+
+        // 写库是异步的：轮询等消费者处理完
+        awaitTrue("笔记被消费者写入数据库", () -> countNotesByTitle("新增测试") == 1);
+
+        Long id = findNoteIdByTitle("新增测试");
+        trackNote(id);
+        Note created = noteMapper.findById(id);
+        assertNotNull(created);
+        assertEquals("新增正文", created.getContent());
+        assertEquals(userId, created.getUserId());     // 发布者是当前登录用户
+        assertNotNull(created.getCreatedAt());         // 数据库生成的时间
     }
 
     @Test
@@ -134,7 +64,21 @@ class NoteCrudTests
     }
 
     @Test
-    @DisplayName("修改笔记：数据库里的内容真的变了，不存在时返回 404")
+    @DisplayName("查询全部笔记：GET /notes 返回 JSON 数组（前端列表页用）")
+    void findAll() throws Exception
+    {
+        insertNote("列表测试A", "正文A");
+        insertNote("列表测试B", "正文B");
+
+        mockMvc.perform(get("/notes"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$").isArray())
+                .andExpect(jsonPath("$[0].id").isNumber())
+                .andExpect(jsonPath("$[0].title").isNotEmpty());
+    }
+
+    @Test
+    @DisplayName("修改笔记：接口返回 202，消费者随后把数据库里的内容改掉")
     void updateNote() throws Exception
     {
         Note saved = insertNote("旧标题", "旧正文");
@@ -143,15 +87,18 @@ class NoteCrudTests
                         .header("Authorization", bearer())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"title\":\"新标题\",\"content\":\"新正文\"}"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.title").value("新标题"))
-                .andExpect(jsonPath("$.content").value("新正文"));
+                .andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.messageId").isNotEmpty());
+
+        awaitTrue("修改被消费者写入数据库", () ->
+                "新标题".equals(titleOf(saved.getId())));
 
         Note inDb = noteMapper.findById(saved.getId());
         assertNotNull(inDb);
         assertEquals("新标题", inDb.getTitle());
         assertEquals("新正文", inDb.getContent());
 
+        // 改不存在的笔记：归属校验是同步的，仍然立刻返回 404
         mockMvc.perform(put("/notes/{id}", 999999999L)
                         .header("Authorization", bearer())
                         .contentType(MediaType.APPLICATION_JSON)
@@ -160,20 +107,28 @@ class NoteCrudTests
     }
 
     @Test
-    @DisplayName("删除笔记：返回 204 且数据库记录消失，不存在时返回 404")
+    @DisplayName("删除笔记：接口返回 202，消费者随后把数据库里的行删掉")
     void deleteNote() throws Exception
     {
         Note saved = insertNote("待删除", "待删除正文");
 
         mockMvc.perform(delete("/notes/{id}", saved.getId())
                         .header("Authorization", bearer()))
-                .andExpect(status().isNoContent());
+                .andExpect(status().isAccepted());                 // 202，不是 204
 
+        awaitTrue("笔记被消费者删除", () -> noteMapper.findById(saved.getId()) == null);
         assertNull(noteMapper.findById(saved.getId()));
 
         mockMvc.perform(delete("/notes/{id}", 999999999L)
                         .header("Authorization", bearer()))
                 .andExpect(status().isNotFound());
+    }
+
+    /** 安全地取标题：笔记可能已经被删掉了 */
+    private String titleOf(Long id)
+    {
+        Note note = noteMapper.findById(id);
+        return note == null ? null : note.getTitle();
     }
 }
 /*

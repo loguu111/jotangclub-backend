@@ -2,47 +2,68 @@ package com.jotang.jotangnote.service;
 
 import com.jotang.jotangnote.entity.Note;
 import com.jotang.jotangnote.mapper.NoteMapper;
+import com.jotang.jotangnote.mq.NoteMessage;
+import com.jotang.jotangnote.mq.NoteMessageProducer;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.util.List;
 import java.util.Objects;
 
 /**
  * 笔记业务层。
- * 职责：只实现业务规则，不关心 HTTP。
- * 约定：查不到/改不到的时候返回 null 或 false，由 Controller 决定转成什么 HTTP 状态码。
+ *
+ * P1-02：一篇笔记属于一个用户，只有本人才能修改和删除，动别人的返回 403。
+ * P2-01：查询走 Redis 缓存（Cache-Aside）。
+ * P3-01：增删改【不再直接写数据库】，而是校验通过后把操作封装成消息投递到 RabbitMQ，
+ *        真正的写库由 NoteMessageConsumer 在后台完成 —— 接口投递完立即返回。
  */
 @Service
 public class NoteService
 {
+    private static final int MAX_TITLE_LENGTH = 255;
 
     private final NoteMapper noteMapper;
     private final NoteCacheService noteCache;
+    private final NoteMessageProducer producer;
 
-    public NoteService(NoteMapper noteMapper, NoteCacheService noteCache)
+    public NoteService(NoteMapper noteMapper, NoteCacheService noteCache, NoteMessageProducer producer)
     {
         this.noteMapper = noteMapper;
         this.noteCache = noteCache;
+        this.producer = producer;
     }
 
     /**
-     * 新增一篇笔记，发布者就是当前登录用户。
-     * insert 只回填了自增 id，创建/更新时间是数据库填的，所以要再查一次才能返回真实数据。
-     */
-    @Transactional
-    public Note create(Long userId, Note note)
-    {
-        note.setUserId(userId);          // 发布者由服务端决定，不信客户端传来的 userId
-        noteMapper.insert(note);
-        return noteMapper.findById(note.getId());
-    }
-
-    /**
-     * 根据 ID 查询笔记，查不到返回 null。
+     * 新增一篇笔记：校验参数 → 投递"创建"消息 → 立刻返回消息 id。
      *
-     * P2-01：这里改成 Cache-Aside（旁路缓存）三步走：
+     * ⚠️ 注意这里【必须自己把参数校验做完】：
+     * 以前数据直接进数据库，标题为空的话数据库的 NOT NULL 约束会拦下来；
+     * 现在数据先变成消息，如果放进去脏数据，报错会发生在后台消费者里，
+     * 客户端根本收不到反馈，只能看到一条日志。
+     */
+    public String create(Long userId, Note note)
+    {
+        checkTitleAndContent(note);
+        return producer.send(NoteMessage.Operation.CREATE, null, userId,
+                note.getTitle(), note.getContent());
+    }
+
+    /**
+     * 查询全部笔记（最新在前）。
+     * 列表【不做缓存】：它变化频繁、命中率低，而且失效逻辑比单条复杂得多，
+     * 缓存收益不划算 —— 这也是真实项目里常见的判断。
+     */
+    public List<Note> findAll()
+    {
+        return noteMapper.findAll();
+    }
+
+    /**
+     * 根据 ID 查询，查不到返回 null（查询不校验归属，任何人都能看）。
+     *
+     * P2-01：Cache-Aside（旁路缓存）三步走：
      *   1. 先查 Redis，命中就直接返回，完全不碰 MySQL
      *   2. 没命中再去查 MySQL
      *   3. 从 MySQL 查到了，顺手写进 Redis，下次就不用查库了
@@ -68,27 +89,45 @@ public class NoteService
         return note;
     }
 
-    /** 修改笔记：只能改自己的 */
-    @Transactional
-    public Note update(Long id, Long userId, Note note)
+    /**
+     * 修改笔记。
+     * 归属校验仍然【同步】做：这样"不是自己的笔记"能立刻返回 403，
+     * 而不是投递出去之后在后台默默失败、客户端还以为提交成功了。
+     */
+    public String update(Long id, Long userId, Note note)
     {
         checkOwner(id, userId, "修改");
-
-        note.setId(id);
-        noteMapper.update(note);
-        // 数据变了，缓存里的旧内容必须删掉，否则下次查询会读到过期数据（缓存一致性）
-        noteCache.evict(id);
-        return noteMapper.findById(id);
+        checkTitleAndContent(note);
+        return producer.send(NoteMessage.Operation.UPDATE, id, userId,
+                note.getTitle(), note.getContent());
     }
 
-    /** 删除笔记：只能删自己的 */
-    @Transactional
-    public void delete(Long id, Long userId)
+    /** 删除笔记：先校验归属，再投递"删除"消息 */
+    public String delete(Long id, Long userId)
     {
         checkOwner(id, userId, "删除");
-        noteMapper.deleteById(id);
-        // 笔记都没了，缓存也不能留着
-        noteCache.evict(id);
+        return producer.send(NoteMessage.Operation.DELETE, id, userId, null, null);
+    }
+
+    /**
+     * 标题和正文的校验。
+     * 因为写库搬到了消费者那边，这里的校验就是最后一道"能给用户及时反馈"的关口。
+     */
+    private void checkTitleAndContent(Note note)
+    {
+        if (note.getTitle() == null || note.getTitle().isBlank())
+        {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "标题不能为空");
+        }
+        if (note.getContent() == null || note.getContent().isBlank())
+        {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "正文不能为空");
+        }
+        if (note.getTitle().length() > MAX_TITLE_LENGTH)
+        {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "标题不能超过 " + MAX_TITLE_LENGTH + " 个字符");
+        }
     }
 
     /**

@@ -1,26 +1,9 @@
 package com.jotang.jotangnote;
 
 import com.jotang.jotangnote.entity.Note;
-import com.jotang.jotangnote.entity.User;
-import com.jotang.jotangnote.mapper.NoteMapper;
-import com.jotang.jotangnote.service.NoteCacheService;
-import com.jotang.jotangnote.service.TokenService;
-import com.jotang.jotangnote.service.UserService;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
-import org.springframework.test.web.servlet.MockMvc;
-import org.springframework.transaction.annotation.Transactional;
-
-import java.util.ArrayList;
-import java.util.List;
-import java.util.UUID;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -34,64 +17,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 /**
  * P1-02 用户注册、登录、越权防护 的接口测试。
  *
- * @Transactional 会把数据库的改动回滚，但 Redis 里的 token 不受影响，
- * 所以每个测试产生的 token 都会记进 tokensToClean，在 @AfterEach 里删掉。
+ * 注册/登录是同步的，所以大部分断言不变；
+ * 只有"新增笔记"因为 P3-01 变成异步了，要等消费者写库。
  */
-@SpringBootTest
-@AutoConfigureMockMvc
-@Transactional
-class AuthTests
+class AuthTests extends ApiTestBase
 {
-
-    /** 从登录响应的 JSON 里抠出 token */
-    private static final Pattern TOKEN_PATTERN = Pattern.compile("\"token\"\\s*:\\s*\"([^\"]+)\"");
-
-    @Autowired
-    private MockMvc mockMvc;
-
-    @Autowired
-    private UserService userService;
-
-    @Autowired
-    private TokenService tokenService;
-
-    @Autowired
-    private NoteMapper noteMapper;
-
-    /** 查询接口会写 Redis 缓存，缓存不受事务回滚影响，用过的笔记 id 要手动清 */
-    @Autowired
-    private NoteCacheService noteCache;
-
-    private final List<String> tokensToClean = new ArrayList<>();
-    private final List<Long> noteIdsToClean = new ArrayList<>();
-
-    @AfterEach
-    void tearDown()
-    {
-        tokensToClean.forEach(tokenService::removeToken);
-        tokensToClean.clear();
-        noteIdsToClean.forEach(noteCache::evict);
-        noteIdsToClean.clear();
-    }
-
-    private String newUsername()
-    {
-        return "u" + UUID.randomUUID().toString().substring(0, 8);
-    }
-
-    /** 注册一个用户，直接发一个 token 给他（省掉走 HTTP 登录的步骤） */
-    private String registerAndLogin(String username)
-    {
-        User user = userService.register(username, "123456");
-        String token = tokenService.createToken(user.getId());
-        tokensToClean.add(token);
-        return token;
-    }
-
-    private Long registerUser(String username)
-    {
-        return userService.register(username, "123456").getId();
-    }
 
     @Test
     @DisplayName("注册：成功返回 id 和 username，响应里绝不出现 password")
@@ -106,6 +36,9 @@ class AuthTests
                 .andExpect(jsonPath("$.id").isNumber())
                 .andExpect(jsonPath("$.username").value(username))
                 .andExpect(jsonPath("$.password").doesNotExist());
+
+        // 这个用户是走 HTTP 注册的，登记进清理列表
+        userIdsToClean.add(userMapper.findByUsername(username).getId());
     }
 
     @Test
@@ -113,7 +46,7 @@ class AuthTests
     void registerValidation() throws Exception
     {
         String username = newUsername();
-        userService.register(username, "123456");
+        registerUser(username);          // 已登记清理
 
         mockMvc.perform(post("/auth/register")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -131,7 +64,7 @@ class AuthTests
     void login() throws Exception
     {
         String username = newUsername();
-        userService.register(username, "123456");
+        registerUser(username);
 
         String body = mockMvc.perform(post("/auth/login")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -141,12 +74,7 @@ class AuthTests
                 .andExpect(jsonPath("$.username").value(username))
                 .andExpect(jsonPath("$.password").doesNotExist())
                 .andReturn().getResponse().getContentAsString();
-
-        Matcher matcher = TOKEN_PATTERN.matcher(body);
-        if (matcher.find())
-        {
-            tokensToClean.add(matcher.group(1));
-        }
+        tokensToClean.add(tokenOf(body));
 
         mockMvc.perform(post("/auth/login")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -155,17 +83,21 @@ class AuthTests
     }
 
     @Test
-    @DisplayName("新增笔记：发布者自动是当前登录用户")
+    @DisplayName("新增笔记：发布者自动是当前登录用户（等消费者写库后核对）")
     void createNoteBelongsToCurrentUser() throws Exception
     {
-        String token = registerAndLogin(newUsername());
-
         mockMvc.perform(post("/notes")
-                        .header("Authorization", "Bearer " + token)
+                        .header("Authorization", bearer())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"title\":\"我的笔记\",\"content\":\"正文\"}"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.userId").isNumber());
+                .andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.messageId").isNotEmpty());
+
+        awaitTrue("笔记被消费者写入", () -> countNotesByTitle("我的笔记") == 1);
+
+        Long id = findNoteIdByTitle("我的笔记");
+        trackNote(id);
+        assertEquals(userId, noteMapper.findById(id).getUserId());
     }
 
     @Test
@@ -190,7 +122,7 @@ class AuthTests
     @DisplayName("越权：改不了也删不掉别人的笔记（403），但查得到")
     void cannotTouchOthersNote() throws Exception
     {
-        Long ownerId = registerUser(newUsername());
+        Long ownerId = registerUser(newUsername()).getId();
         String attackerToken = registerAndLogin(newUsername());
 
         Note note = new Note();
@@ -198,23 +130,23 @@ class AuthTests
         note.setContent("别人的正文");
         note.setUserId(ownerId);
         noteMapper.insert(note);
-        noteIdsToClean.add(note.getId());
+        trackNote(note.getId());
 
         // 查询是公开的，谁都能看
         mockMvc.perform(get("/notes/{id}", note.getId()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.title").value("别人的笔记"));
 
-        // 修改别人的 → 403
+        // 修改别人的 → 403（归属校验是同步的，和 MQ 无关）
         mockMvc.perform(put("/notes/{id}", note.getId())
-                        .header("Authorization", "Bearer " + attackerToken)
+                        .header("Authorization", bearer(attackerToken))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"title\":\"我要改掉它\",\"content\":\"改掉\"}"))
                 .andExpect(status().isForbidden());
 
         // 删除别人的 → 403
         mockMvc.perform(delete("/notes/{id}", note.getId())
-                        .header("Authorization", "Bearer " + attackerToken))
+                        .header("Authorization", bearer(attackerToken)))
                 .andExpect(status().isForbidden());
 
         // 确认数据真的没被动过
@@ -227,20 +159,20 @@ class AuthTests
     @DisplayName("退出登录后，原来的 token 立刻失效")
     void logoutInvalidatesToken() throws Exception
     {
-        String token = registerAndLogin(newUsername());
+        String otherToken = registerAndLogin(newUsername());
 
         mockMvc.perform(post("/notes")
-                        .header("Authorization", "Bearer " + token)
+                        .header("Authorization", bearer(otherToken))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"title\":\"登录后发的\",\"content\":\"正文\"}"))
-                .andExpect(status().isOk());
+                .andExpect(status().isAccepted());
 
         mockMvc.perform(post("/auth/logout")
-                        .header("Authorization", "Bearer " + token))
+                        .header("Authorization", bearer(otherToken)))
                 .andExpect(status().isNoContent());
 
         mockMvc.perform(post("/notes")
-                        .header("Authorization", "Bearer " + token)
+                        .header("Authorization", bearer(otherToken))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"title\":\"退出后再发\",\"content\":\"正文\"}"))
                 .andExpect(status().isUnauthorized());

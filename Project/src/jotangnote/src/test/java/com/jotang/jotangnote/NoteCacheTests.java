@@ -1,24 +1,10 @@
 package com.jotang.jotangnote;
 
 import com.jotang.jotangnote.entity.Note;
-import com.jotang.jotangnote.entity.User;
-import com.jotang.jotangnote.mapper.NoteMapper;
-import com.jotang.jotangnote.service.NoteCacheService;
-import com.jotang.jotangnote.service.TokenService;
-import com.jotang.jotangnote.service.UserService;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
-import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.MediaType;
-import org.springframework.test.web.servlet.MockMvc;
-import org.springframework.transaction.annotation.Transactional;
-
-import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -32,54 +18,18 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 /**
  * P2-01 笔记查询缓存 的测试。
  *
- * 注意：@Transactional 只能回滚 MySQL 的改动，Redis 里的缓存不受数据库事务管辖，
- * 所以每个用例结束都要手动把缓存清掉，否则会污染后面的测试。
+ * 查询（GET）是同步的，改、删是异步的（P3-01 之后要等消费者），
+ * 所以"缓存被删掉"这件事需要轮询等待。
  */
-@SpringBootTest
-@AutoConfigureMockMvc
-@Transactional
-class NoteCacheTests
+class NoteCacheTests extends ApiTestBase
 {
 
-    @Autowired
-    private MockMvc mockMvc;
-
-    @Autowired
-    private NoteMapper noteMapper;
-
-    @Autowired
-    private UserService userService;
-
-    @Autowired
-    private TokenService tokenService;
-
-    @Autowired
-    private NoteCacheService noteCache;
-
-    @Autowired
-    private StringRedisTemplate redisTemplate;
-
-    private String token;
     private Note note;
 
     @BeforeEach
-    void setUp()
+    void setUpNote()
     {
-        User user = userService.register("cache" + UUID.randomUUID().toString().substring(0, 8), "123456");
-        token = tokenService.createToken(user.getId());
-
-        note = new Note();
-        note.setTitle("缓存测试标题");
-        note.setContent("缓存测试正文");
-        note.setUserId(user.getId());
-        noteMapper.insert(note);
-    }
-
-    @AfterEach
-    void tearDown()
-    {
-        tokenService.removeToken(token);
-        noteCache.evict(note.getId());
+        note = insertNote("缓存测试标题", "缓存测试正文");
     }
 
     /** 直接问 Redis：这条笔记的缓存还在不在 */
@@ -120,20 +70,20 @@ class NoteCacheTests
     }
 
     @Test
-    @DisplayName("修改笔记会删掉缓存，再查拿到的是新内容")
+    @DisplayName("修改笔记：消费者处理完之后缓存被删掉，再查拿到的是新内容")
     void updateNote_evictsCache() throws Exception
     {
         mockMvc.perform(get("/notes/{id}", note.getId())).andExpect(status().isOk());
         assertTrue(cached(note.getId()), "查询后应该有缓存");
 
         mockMvc.perform(put("/notes/{id}", note.getId())
-                        .header("Authorization", "Bearer " + token)
+                        .header("Authorization", bearer())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"title\":\"改过了\",\"content\":\"新正文\"}"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.title").value("改过了"));
+                .andExpect(status().isAccepted());
 
-        assertFalse(cached(note.getId()), "修改之后缓存必须被删掉");
+        // 删缓存发生在消费者里，要等
+        awaitTrue("修改后缓存被删掉", () -> !cached(note.getId()));
 
         // 再查一次，必须是新标题——如果缓存没删干净，这里会读到"缓存测试标题"
         mockMvc.perform(get("/notes/{id}", note.getId()))
@@ -142,16 +92,17 @@ class NoteCacheTests
     }
 
     @Test
-    @DisplayName("删除笔记会删掉缓存")
+    @DisplayName("删除笔记：消费者处理完之后缓存也被删掉")
     void deleteNote_evictsCache() throws Exception
     {
         mockMvc.perform(get("/notes/{id}", note.getId())).andExpect(status().isOk());
         assertTrue(cached(note.getId()), "查询后应该有缓存");
 
         mockMvc.perform(delete("/notes/{id}", note.getId())
-                        .header("Authorization", "Bearer " + token))
-                .andExpect(status().isNoContent());
+                        .header("Authorization", bearer()))
+                .andExpect(status().isAccepted());
 
+        awaitTrue("删除后缓存被清掉", () -> !cached(note.getId()));
         assertFalse(cached(note.getId()), "删除之后缓存也应该被删掉");
     }
 }
