@@ -47,6 +47,14 @@ public class AiClient
                 .defaultHeader(HttpHeaders.AUTHORIZATION, "Bearer " + apiKey)
                 .build();
         this.model = model;
+
+        // 启动自检：没配 key 不阻止启动（其他功能还能用），但要让人一眼看到原因，
+        // 否则只会等到调 /chat 收到 502 才发现。
+        if (apiKey == null || apiKey.isBlank())
+        {
+            log.warn("没有配置 DEEPSEEK_API_KEY：/chat 接口会返回 502，其他功能不受影响。");
+            log.warn("需要 AI 功能时，先 export DEEPSEEK_API_KEY=sk-xxx 再重启（参考仓库根目录的 .env.example）。");
+        }
     }
 
     /**

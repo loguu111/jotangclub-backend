@@ -25,6 +25,10 @@
         ul#note-list { list-style: none; padding: 0; margin: 0; max-height: 300px; overflow: auto; }
         ul#note-list li { padding: 8px; border-bottom: 1px solid #eee; cursor: pointer; }
         ul#note-list li:hover { background: #f4f2ff; }
+        .note-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+        .note-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        button.del { background: #fdecec; color: #c0392b; padding: 4px 10px; font-size: 13px; flex: none; }
+        button.del:hover { background: #f9d5d5; }
         #note-detail { white-space: pre-wrap; background: #faf9ff; border: 1px solid #eee;
                        border-radius: 6px; padding: 10px; margin-top: 10px; min-height: 60px; }
         #chat-log { height: 300px; overflow: auto; background: #faf9ff; border: 1px solid #eee;
@@ -66,7 +70,8 @@
             <button onclick="createNote()">发布</button>
             <button class="ghost" onclick="loadNotes()">刷新列表</button>
         </div>
-        <p class="muted">写操作是异步的（接口立刻返回 202），所以发布后会自动刷新列表。点下面任意一条看全文。</p>
+        <p class="muted">写操作是异步的（接口立刻返回 202），所以发布/删除后会自动刷新列表。
+            点标题看全文，点右侧「删除」删掉自己的笔记。</p>
         <ul id="note-list"></ul>
         <div id="note-detail">（未选择笔记）</div>
     </section>
@@ -81,6 +86,8 @@
             <button class="ghost" onclick="newConversation()">新会话</button>
         </div>
         <p class="muted">会话号：<span id="cid">（还没有，发送第一条消息时自动创建）</span></p>
+        <p class="muted">ℹ️ AI 的 Key 配在<b>后端</b>（环境变量 <code>DEEPSEEK_API_KEY</code>），
+            前端不保存、也不该保存 Key —— 浏览器里能看到的 Key 等于公开的 Key。</p>
     </section>
 </main>
 
@@ -109,7 +116,9 @@
         const text = await resp.text();
         const data = text ? JSON.parse(text) : null;
         if (!resp.ok) {
-            throw new Error((data && (data.message || data.error)) || ('HTTP ' + resp.status));
+            const err = new Error((data && (data.message || data.error)) || ('HTTP ' + resp.status));
+            err.status = resp.status;      // 把状态码带出去，调用方好区分 401 / 403 / 404 / 502
+            throw err;
         }
         return { status: resp.status, data };
     }
@@ -168,8 +177,23 @@
             }
             data.forEach(note => {
                 const li = document.createElement('li');
-                li.textContent = '#' + note.id + '　' + note.title;
-                li.onclick = () => showNote(note.id);
+                li.className = 'note-row';
+
+                const title = document.createElement('span');
+                title.className = 'note-title';
+                title.textContent = '#' + note.id + '　' + note.title;
+                title.onclick = () => showNote(note.id);
+
+                const del = document.createElement('button');
+                del.className = 'del';
+                del.textContent = '删除';
+                del.onclick = (event) => {
+                    event.stopPropagation();     // 别让点击冒泡到"查看详情"
+                    deleteNote(note.id, note.title);
+                };
+
+                li.appendChild(title);
+                li.appendChild(del);
                 list.appendChild(li);
             });
         } catch (e) { toast('加载列表失败：' + e.message); }
@@ -198,6 +222,28 @@
                 '#' + data.id + '　' + data.title + '\n\n' + data.content +
                 '\n\n（作者 ID：' + data.userId + '　创建于 ' + data.createdAt + '）';
         } catch (e) { toast('查询失败：' + e.message); }
+    }
+
+    /**
+     * 删除笔记。
+     * 删除同样是异步的：接口只返回 202（消息已收下），真正删库由消费者在后台做，
+     * 所以删完要等一会儿再刷新列表。
+     * 只有作者本人能删 —— 删别人的会被后端拒绝（403）。
+     */
+    async function deleteNote(id, title) {
+        if (!state.token) { toast('请先登录'); return; }
+        if (!confirm('确定要删除笔记「' + title + '」吗？')) return;
+
+        try {
+            const { status } = await api('/notes/' + id, { method: 'DELETE' });
+            toast('已受理（HTTP ' + status + '），1 秒后刷新列表');
+            setTimeout(loadNotes, 1000);
+        } catch (e) {
+            if (e.status === 403) toast('只能删除自己的笔记（后端返回 403）');
+            else if (e.status === 404) toast('这篇笔记不存在（可能已经被删了）');
+            else if (e.status === 401) toast('登录已过期，请重新登录');
+            else toast('删除失败：' + e.message);
+        }
     }
 
     // ---------- AI 对话 ----------
@@ -237,7 +283,20 @@
         } catch (e) {
             const log = document.getElementById('chat-log');
             log.removeChild(log.lastChild);
-            appendMessage('ai', '出错了：' + e.message + '（检查一下 API Key 配了没）');
+            if (e.status === 502) {
+                // 502 = 后端调不通大模型，最常见的原因就是没配 API Key
+                appendMessage('ai',
+                    '后端调用 AI 失败了（HTTP 502）。\n\n' +
+                    '最常见的原因：后端没有配置 DEEPSEEK_API_KEY。\n' +
+                    '在【启动后端的那个终端】里执行：\n' +
+                    '    export DEEPSEEK_API_KEY=sk-你的key\n' +
+                    '然后重启后端。\n\n' +
+                    '注意：Key 配在后端，前端不保存也不需要 Key。');
+            } else if (e.status === 400) {
+                appendMessage('ai', '消息不能为空。');
+            } else {
+                appendMessage('ai', '出错了：' + e.message);
+            }
         }
     }
 
