@@ -35,7 +35,7 @@ Project 		 项目目录
 1. 配置环境变量
 
 ```bash
-code .env
+cd ~/project/jotangclub-backend && code .env
 ```
 
 DB_PASSWORD=
