@@ -86,8 +86,6 @@
             <button class="ghost" onclick="newConversation()">新会话</button>
         </div>
         <p class="muted">会话号：<span id="cid">（还没有，发送第一条消息时自动创建）</span></p>
-        <p class="muted">ℹ️ AI 的 Key 配在<b>后端</b>（环境变量 <code>DEEPSEEK_API_KEY</code>），
-            前端不保存、也不该保存 Key —— 浏览器里能看到的 Key 等于公开的 Key。</p>
     </section>
 </main>
 
@@ -284,14 +282,7 @@
             const log = document.getElementById('chat-log');
             log.removeChild(log.lastChild);
             if (e.status === 502) {
-                // 502 = 后端调不通大模型，最常见的原因就是没配 API Key
-                appendMessage('ai',
-                    '后端调用 AI 失败了（HTTP 502）。\n\n' +
-                    '最常见的原因：后端没有配置 DEEPSEEK_API_KEY。\n' +
-                    '在【启动后端的那个终端】里执行：\n' +
-                    '    export DEEPSEEK_API_KEY=sk-你的key\n' +
-                    '然后重启后端。\n\n' +
-                    '注意：Key 配在后端，前端不保存也不需要 Key。');
+                appendMessage('ai', 'AI 服务暂时不可用（HTTP 502），请稍后再试。');
             } else if (e.status === 400) {
                 appendMessage('ai', '消息不能为空。');
             } else {
