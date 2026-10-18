@@ -1,4 +1,4 @@
-package com.jotang.jotangnote.mq;
+package com.jotang.jotangnote.entity;
 
 /**
  * 投递到 MQ 的"笔记操作"消息。

@@ -1,7 +1,7 @@
 package com.jotang.jotangnote.controller;
 
-import com.jotang.jotangnote.ai.ChatMessage;
-import com.jotang.jotangnote.ai.ConversationService;
+import com.jotang.jotangnote.json.ChatMessage;
+import com.jotang.jotangnote.service.ConversationService;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;

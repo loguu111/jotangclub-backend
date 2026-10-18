@@ -2,8 +2,7 @@ package com.jotang.jotangnote.service;
 
 import com.jotang.jotangnote.entity.Note;
 import com.jotang.jotangnote.mapper.NoteMapper;
-import com.jotang.jotangnote.mq.NoteMessage;
-import com.jotang.jotangnote.mq.NoteMessageProducer;
+import com.jotang.jotangnote.entity.NoteMessage;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;

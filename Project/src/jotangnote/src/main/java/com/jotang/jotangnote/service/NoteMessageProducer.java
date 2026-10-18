@@ -1,4 +1,6 @@
-package com.jotang.jotangnote.mq;
+package com.jotang.jotangnote.service;
+
+import com.jotang.jotangnote.entity.NoteMessage;
 
 import com.jotang.jotangnote.config.RabbitMQConfig;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;

@@ -1,4 +1,6 @@
-package com.jotang.jotangnote.ai;
+package com.jotang.jotangnote.service;
+
+import com.jotang.jotangnote.json.ChatMessage;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.StringRedisTemplate;

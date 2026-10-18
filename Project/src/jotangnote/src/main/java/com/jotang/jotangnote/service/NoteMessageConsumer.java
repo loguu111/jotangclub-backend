@@ -1,9 +1,10 @@
-package com.jotang.jotangnote.mq;
+package com.jotang.jotangnote.service;
+
+import com.jotang.jotangnote.entity.NoteMessage;
 
 import com.jotang.jotangnote.config.RabbitMQConfig;
 import com.jotang.jotangnote.entity.Note;
 import com.jotang.jotangnote.mapper.NoteMapper;
-import com.jotang.jotangnote.service.NoteCacheService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;

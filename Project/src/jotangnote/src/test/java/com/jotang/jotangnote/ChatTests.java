@@ -1,9 +1,9 @@
 package com.jotang.jotangnote;
 
-import com.jotang.jotangnote.ai.AiClient;
-import com.jotang.jotangnote.ai.ChatMessage;
-import com.jotang.jotangnote.ai.ConversationService;
-import com.jotang.jotangnote.ai.NoteQueryTool;
+import com.jotang.jotangnote.service.AiClient;
+import com.jotang.jotangnote.json.ChatMessage;
+import com.jotang.jotangnote.service.ConversationService;
+import com.jotang.jotangnote.service.NoteQueryTool;
 import com.jotang.jotangnote.entity.Note;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;

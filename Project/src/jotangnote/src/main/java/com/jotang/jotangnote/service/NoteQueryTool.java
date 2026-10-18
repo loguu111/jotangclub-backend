@@ -1,7 +1,6 @@
-package com.jotang.jotangnote.ai;
+package com.jotang.jotangnote.service;
 
 import com.jotang.jotangnote.entity.Note;
-import com.jotang.jotangnote.service.NoteService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;

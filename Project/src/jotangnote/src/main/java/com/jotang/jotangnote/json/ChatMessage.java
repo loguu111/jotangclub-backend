@@ -1,4 +1,4 @@
-package com.jotang.jotangnote.ai;
+package com.jotang.jotangnote.json;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonInclude;

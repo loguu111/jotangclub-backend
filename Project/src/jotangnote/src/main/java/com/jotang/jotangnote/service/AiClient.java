@@ -1,4 +1,6 @@
-package com.jotang.jotangnote.ai;
+package com.jotang.jotangnote.service;
+
+import com.jotang.jotangnote.json.ChatMessage;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import org.slf4j.Logger;
